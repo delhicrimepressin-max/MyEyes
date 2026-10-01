@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cloud Cam P2P</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; margin: 0; padding: 16px; display: flex; flex-direction: column; align-items: center; }
     .card { background: #1e1e1e; padding: 20px; border-radius: 12px; width: 100%; max-width: 500px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); box-sizing: border-box; }
     video { width: 100%; border-radius: 8px; background: #000; margin-top: 15px; }
     button { background: #2563eb; color: #fff; border: none; padding: 12px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-right: 8px; margin-top: 10px; font-size: 15px; }
     button:disabled { background: #4b5563; cursor: not-allowed; }
     .hidden { display: none; }
     #status { margin-top: 12px; font-size: 0.95em; color: #9ca3af; word-break: break-word; }
+    #logBox { margin-top: 20px; background: #000; border: 1px solid #333; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 12px; color: #4ade80; white-space: pre-wrap; word-break: break-all; width: 100%; max-width: 500px; box-sizing: border-box; }
   </style>
 </head>
 <body>
@@ -38,8 +39,19 @@
   </div>
 </div>
 
+<div id="logBox">Diagnostic Console: Initializing...</div>
+
 <!-- Firebase SDKs -->
 <script type="module">
+  const logBox = document.getElementById('logBox');
+  function addLog(msg, isError = false) {
+    logBox.innerHTML += `\n<span style="color:${isError ? '#f87171' : '#4ade80'}">${msg}</span>`;
+  }
+
+  window.onerror = (msg, url, line) => {
+    addLog(`System Error: ${msg} (Line ${line})`, true);
+  };
+
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
   import { 
     getAuth, 
@@ -68,228 +80,175 @@
     measurementId: "G-45VCSVYQFL"
   };
 
-  const app = initializeApp(firebaseConfig);
-  const auth = getAuth(app);
-  const db = getFirestore(app);
-  const provider = new GoogleAuthProvider();
+  try {
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const provider = new GoogleAuthProvider();
 
-  const rtcConfig = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
-    ]
-  };
+    const rtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
 
-  let currentUser = null;
-  let peerConnection = null;
-  let localStream = null;
+    let currentUser = null;
+    let peerConnection = null;
+    let localStream = null;
 
-  const loginBtn = document.getElementById('loginBtn');
-  const logoutBtn = document.getElementById('logoutBtn');
-  const startCamBtn = document.getElementById('startCamBtn');
-  const startViewerBtn = document.getElementById('startViewerBtn');
-  const statusText = document.getElementById('status');
-  const videoPlayer = document.getElementById('videoPlayer');
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const startCamBtn = document.getElementById('startCamBtn');
+    const startViewerBtn = document.getElementById('startViewerBtn');
+    const statusText = document.getElementById('status');
+    const videoPlayer = document.getElementById('videoPlayer');
 
-  // Handle mobile redirect authentication
-  loginBtn.onclick = () => {
-    statusText.innerText = "Redirecting to Google sign in...";
-    signInWithRedirect(auth, provider);
-  };
+    addLog("Firebase loaded. Checking auth redirect...");
 
-  logoutBtn.onclick = () => signOut(auth);
-
-  getRedirectResult(auth).catch(error => {
-    statusText.innerText = "Auth Error: " + error.message;
-  });
-
-  onAuthStateChanged(auth, user => {
-    currentUser = user;
-    if (user) {
-      document.getElementById('authSection').classList.add('hidden');
-      document.getElementById('appSection').classList.remove('hidden');
-      document.getElementById('userEmail').innerText = user.email;
-      statusText.innerText = "Signed in successfully. Ready.";
-    } else {
-      document.getElementById('authSection').classList.remove('hidden');
-      document.getElementById('appSection').classList.add('hidden');
-    }
-  });
-
-  // --- CAMERA MODE (BROADCASTER) ---
-  startCamBtn.onclick = async () => {
-    startCamBtn.disabled = true;
-    startViewerBtn.disabled = true;
-    statusText.innerText = "Requesting camera permissions...";
-
-    try {
-      peerConnection = new RTCPeerConnection(rtcConfig);
-      const userDocRef = doc(db, 'streams', currentUser.uid);
-      const offerCandidates = collection(userDocRef, 'offerCandidates');
-      const answerCandidates = collection(userDocRef, 'answerCandidates');
-
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
-        audio: true
-      });
-      
-      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-      videoPlayer.srcObject = localStream;
-
-      peerConnection.onicecandidate = event => {
-        if (event.candidate) {
-          addDoc(offerCandidates, event.candidate.toJSON());
-        }
-      };
-
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      await setDoc(userDocRef, { offer: { type: offer.type, sdp: offer.sdp } });
-
-      statusText.innerText = "Camera live. Waiting for viewer to connect...";
-
-      onSnapshot(userDocRef, async snapshot => {
-        const data = snapshot.data();
-        if (data?.answer && !peerConnection.currentRemoteDescription) {
-          const answer = new RTCSessionDescription(data.answer);
-          await peerConnection.setRemoteDescription(answer);
-          statusText.innerText = "Connected: Streaming to Viewer.";
-        }
+    getRedirectResult(auth)
+      .then(res => {
+        if (res?.user) addLog("Redirect sign-in successful: " + res.user.email);
+      })
+      .catch(error => {
+        addLog(`Redirect Auth Error [${error.code}]: ${error.message}`, true);
       });
 
-      onSnapshot(answerCandidates, snapshot => {
-        snapshot.docChanges().forEach(change => {
-          if (change.type === 'added') {
-            peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+    loginBtn.onclick = () => {
+      addLog("Starting Google redirect...");
+      signInWithRedirect(auth, provider);
+    };
+
+    logoutBtn.onclick = () => signOut(auth);
+
+    onAuthStateChanged(auth, user => {
+      currentUser = user;
+      if (user) {
+        document.getElementById('authSection').classList.add('hidden');
+        document.getElementById('appSection').classList.remove('hidden');
+        document.getElementById('userEmail').innerText = user.email;
+        addLog(`Ready. Logged in as: ${user.email}`);
+      } else {
+        document.getElementById('authSection').classList.remove('hidden');
+        document.getElementById('appSection').classList.add('hidden');
+        addLog("Status: User not signed in.");
+      }
+    });
+
+    // --- CAMERA MODE ---
+    startCamBtn.onclick = async () => {
+      startCamBtn.disabled = true;
+      startViewerBtn.disabled = true;
+      statusText.innerText = "Requesting camera permissions...";
+      addLog("Opening camera...");
+
+      try {
+        peerConnection = new RTCPeerConnection(rtcConfig);
+        const userDocRef = doc(db, 'streams', currentUser.uid);
+        const offerCandidates = collection(userDocRef, 'offerCandidates');
+        const answerCandidates = collection(userDocRef, 'answerCandidates');
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
+          audio: true
+        });
+        
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        videoPlayer.srcObject = localStream;
+
+        peerConnection.onicecandidate = event => {
+          if (event.candidate) {
+            addDoc(offerCandidates, event.candidate.toJSON());
+          }
+        };
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        await setDoc(userDocRef, { offer: { type: offer.type, sdp: offer.sdp } });
+
+        statusText.innerText = "Camera live. Waiting for viewer...";
+        addLog("SDP offer uploaded. Awaiting peer...");
+
+        onSnapshot(userDocRef, async snapshot => {
+          const data = snapshot.data();
+          if (data?.answer && !peerConnection.currentRemoteDescription) {
+            const answer = new RTCSessionDescription(data.answer);
+            await peerConnection.setRemoteDescription(answer);
+            statusText.innerText = "Connected: Streaming to Viewer.";
+            addLog("Viewer joined! Stream established.");
           }
         });
-      });
-    } catch (err) {
-      statusText.innerText = "Camera Error: " + err.message;
-      startCamBtn.disabled = false;
-      startViewerBtn.disabled = false;
-    }
-  };
 
-  // --- VIEWER MODE (RECEIVER) ---
-  startViewerBtn.onclick = async () => {
-    startCamBtn.disabled = true;
-    startViewerBtn.disabled = true;
-    videoPlayer.muted = false;
-    statusText.innerText = "Connecting to camera stream...";
+        onSnapshot(answerCandidates, snapshot => {
+          snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+              peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+            }
+          });
+        });
+      } catch (err) {
+        statusText.innerText = "Camera Error: " + err.message;
+        addLog(`Camera Error: ${err.message}`, true);
+        startCamBtn.disabled = false;
+        startViewerBtn.disabled = false;
+      }
+    };
 
-    try {
-      peerConnection = new RTCPeerConnection(rtcConfig);
-      const userDocRef = doc(db, 'streams', currentUser.uid);
-      const offerCandidates = collection(userDocRef, 'offerCandidates');
-      const answerCandidates = collection(userDocRef, 'answerCandidates');
+    // --- VIEWER MODE ---
+    startViewerBtn.onclick = async () => {
+      startCamBtn.disabled = true;
+      startViewerBtn.disabled = true;
+      videoPlayer.muted = false;
+      statusText.innerText = "Connecting to camera stream...";
+      addLog("Looking for camera broadcast...");
 
-      peerConnection.ontrack = event => {
-        videoPlayer.srcObject = event.streams[0];
-        statusText.innerText = "Connected to remote camera.";
-      };
+      try {
+        peerConnection = new RTCPeerConnection(rtcConfig);
+        const userDocRef = doc(db, 'streams', currentUser.uid);
+        const offerCandidates = collection(userDocRef, 'offerCandidates');
+        const answerCandidates = collection(userDocRef, 'answerCandidates');
 
-      peerConnection.onicecandidate = event => {
-        if (event.candidate) {
-          addDoc(answerCandidates, event.candidate.toJSON());
-        }
-      };
+        peerConnection.ontrack = event => {
+          videoPlayer.srcObject = event.streams[0];
+          statusText.innerText = "Connected to remote camera.";
+          addLog("Stream received. Playing feed.");
+        };
 
-      onSnapshot(userDocRef, async snapshot => {
-        const data = snapshot.data();
-        if (data?.offer && !peerConnection.currentRemoteDescription) {
-          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-          
-          const answer = await peerConnection.createAnswer();
-          await peerConnection.setLocalDescription(answer);
-          await setDoc(userDocRef, { answer: { type: answer.type, sdp: answer.sdp } }, { merge: true });
-        }
-      });
+        peerConnection.onicecandidate = event => {
+          if (event.candidate) {
+            addDoc(answerCandidates, event.candidate.toJSON());
+          }
+        };
 
-      onSnapshot(offerCandidates, snapshot => {
-        snapshot.docChanges().forEach(change => {
-          if (change.type === 'added') {
-            peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+        onSnapshot(userDocRef, async snapshot => {
+          const data = snapshot.data();
+          if (data?.offer && !peerConnection.currentRemoteDescription) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            await setDoc(userDocRef, { answer: { type: answer.type, sdp: answer.sdp } }, { merge: true });
+            addLog("Answer SDP posted. Connecting...");
           }
         });
-      });
-    } catch (err) {
-      statusText.innerText = "Viewer Error: " + err.message;
-      startCamBtn.disabled = false;
-      startViewerBtn.disabled = false;
-    }
-  };
+
+        onSnapshot(offerCandidates, snapshot => {
+          snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+              peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+            }
+          });
+        });
+      } catch (err) {
+        statusText.innerText = "Viewer Error: " + err.message;
+        addLog(`Viewer Error: ${err.message}`, true);
+        startCamBtn.disabled = false;
+        startViewerBtn.disabled = false;
+      }
+    };
+
+  } catch (err) {
+    addLog(`Setup Error: ${err.message}`, true);
+  }
 </script>
-</body>
-</html>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cam Test</title>
-  <style>
-    body { font-family: sans-serif; background: #121212; color: #fff; padding: 20px; }
-    button { background: #2563eb; color: #fff; border: none; padding: 14px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; width: 100%; margin-bottom: 12px; }
-    #log { background: #000; border: 1px solid #333; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; color: #4ade80; white-space: pre-wrap; word-break: break-all; min-height: 100px; }
-  </style>
-</head>
-<body>
-
-  <h2>Webcam Auth Diagnostic</h2>
-  <button id="testBtn">Test Google Sign-In</button>
-  <div id="log">Ready. Tap the button above to begin...</div>
-
-  <script type="module">
-    const logBox = document.getElementById('log');
-    function log(msg, isError = false) {
-      logBox.innerHTML += `\n<span style="color:${isError ? '#f87171' : '#4ade80'}">${msg}</span>`;
-    }
-
-    window.onerror = (msg, url, line) => {
-      log(`Script Error: ${msg} (Line ${line})`, true);
-    };
-
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getAuth, signInWithPopup, GoogleAuthProvider, getRedirectResult, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyCQoxRuQs8lnDN4deKn0yzaQ9ZqV7ge3IE",
-      authDomain: "myeyes-77357.firebaseapp.com",
-      projectId: "myeyes-77357",
-      storageBucket: "myeyes-77357.firebasestorage.app",
-      messagingSenderId: "838984034013",
-      appId: "1:838984034013:web:339c2e5983baade87c5d34",
-      measurementId: "G-45VCSVYQFL"
-    };
-
-    try {
-      const app = initializeApp(firebaseConfig);
-      const auth = getAuth(app);
-      const provider = new GoogleAuthProvider();
-
-      log("Firebase initialized successfully.");
-
-      onAuthStateChanged(auth, user => {
-        if (user) {
-          log(`SUCCESS! Logged in as: ${user.email}`);
-        } else {
-          log("User status: Signed out.");
-        }
-      });
-
-      document.getElementById('testBtn').onclick = async () => {
-        log("Opening sign-in window...");
-        try {
-          const res = await signInWithPopup(auth, provider);
-          log(`Sign-in completed for: ${res.user.email}`);
-        } catch (err) {
-          log(`ERROR [${err.code}]: ${err.message}`, true);
-        }
-      };
-    } catch (e) {
-      log(`Initialization failed: ${e.message}`, true);
-    }
-  </script>
 </body>
 </html>
