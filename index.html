@@ -222,3 +222,74 @@
 </script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cam Test</title>
+  <style>
+    body { font-family: sans-serif; background: #121212; color: #fff; padding: 20px; }
+    button { background: #2563eb; color: #fff; border: none; padding: 14px 20px; border-radius: 8px; font-size: 16px; font-weight: bold; width: 100%; margin-bottom: 12px; }
+    #log { background: #000; border: 1px solid #333; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; color: #4ade80; white-space: pre-wrap; word-break: break-all; min-height: 100px; }
+  </style>
+</head>
+<body>
+
+  <h2>Webcam Auth Diagnostic</h2>
+  <button id="testBtn">Test Google Sign-In</button>
+  <div id="log">Ready. Tap the button above to begin...</div>
+
+  <script type="module">
+    const logBox = document.getElementById('log');
+    function log(msg, isError = false) {
+      logBox.innerHTML += `\n<span style="color:${isError ? '#f87171' : '#4ade80'}">${msg}</span>`;
+    }
+
+    window.onerror = (msg, url, line) => {
+      log(`Script Error: ${msg} (Line ${line})`, true);
+    };
+
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getAuth, signInWithPopup, GoogleAuthProvider, getRedirectResult, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCQoxRuQs8lnDN4deKn0yzaQ9ZqV7ge3IE",
+      authDomain: "myeyes-77357.firebaseapp.com",
+      projectId: "myeyes-77357",
+      storageBucket: "myeyes-77357.firebasestorage.app",
+      messagingSenderId: "838984034013",
+      appId: "1:838984034013:web:339c2e5983baade87c5d34",
+      measurementId: "G-45VCSVYQFL"
+    };
+
+    try {
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const provider = new GoogleAuthProvider();
+
+      log("Firebase initialized successfully.");
+
+      onAuthStateChanged(auth, user => {
+        if (user) {
+          log(`SUCCESS! Logged in as: ${user.email}`);
+        } else {
+          log("User status: Signed out.");
+        }
+      });
+
+      document.getElementById('testBtn').onclick = async () => {
+        log("Opening sign-in window...");
+        try {
+          const res = await signInWithPopup(auth, provider);
+          log(`Sign-in completed for: ${res.user.email}`);
+        } catch (err) {
+          log(`ERROR [${err.code}]: ${err.message}`, true);
+        }
+      };
+    } catch (e) {
+      log(`Initialization failed: ${e.message}`, true);
+    }
+  </script>
+</body>
+</html>
