@@ -6,12 +6,12 @@
   <title>Cloud Cam P2P</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-    .card { background: #1e1e1e; padding: 20px; border-radius: 12px; width: 100%; max-width: 500px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    .card { background: #1e1e1e; padding: 20px; border-radius: 12px; width: 100%; max-width: 500px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); box-sizing: border-box; }
     video { width: 100%; border-radius: 8px; background: #000; margin-top: 15px; }
-    button { background: #2563eb; color: #fff; border: none; padding: 10px 16px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-right: 8px; margin-top: 10px; }
+    button { background: #2563eb; color: #fff; border: none; padding: 12px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-right: 8px; margin-top: 10px; font-size: 15px; }
     button:disabled { background: #4b5563; cursor: not-allowed; }
     .hidden { display: none; }
-    #status { margin-top: 10px; font-size: 0.9em; color: #9ca3af; }
+    #status { margin-top: 12px; font-size: 0.95em; color: #9ca3af; word-break: break-word; }
   </style>
 </head>
 <body>
@@ -24,7 +24,7 @@
   </div>
 
   <div id="appSection" class="hidden">
-    <p>Signed in as: <span id="userEmail" style="color: #60a5fa;"></span></p>
+    <p>Signed in as: <br><strong id="userEmail" style="color: #60a5fa;"></strong></p>
     <button id="logoutBtn" style="background: #dc2626;">Sign Out</button>
     <hr style="border-color: #333; margin: 15px 0;">
 
@@ -41,11 +41,24 @@
 <!-- Firebase SDKs -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-  import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-  import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+  import { 
+    getAuth, 
+    signInWithRedirect, 
+    getRedirectResult, 
+    GoogleAuthProvider, 
+    signOut, 
+    onAuthStateChanged 
+  } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+  import { 
+    getFirestore, 
+    doc, 
+    setDoc, 
+    onSnapshot, 
+    collection, 
+    addDoc 
+  } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-  // Replace with your Firebase Project Configuration
-    const firebaseConfig = {
+  const firebaseConfig = {
     apiKey: "AIzaSyCQoxRuQs8lnDN4deKn0yzaQ9ZqV7ge3IE",
     authDomain: "myeyes-77357.firebaseapp.com",
     projectId: "myeyes-77357",
@@ -58,6 +71,7 @@
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
+  const provider = new GoogleAuthProvider();
 
   const rtcConfig = {
     iceServers: [
@@ -77,9 +91,17 @@
   const statusText = document.getElementById('status');
   const videoPlayer = document.getElementById('videoPlayer');
 
-  // Authentication Flow
-  loginBtn.onclick = () => signInWithPopup(auth, new GoogleAuthProvider());
+  // Handle mobile redirect authentication
+  loginBtn.onclick = () => {
+    statusText.innerText = "Redirecting to Google sign in...";
+    signInWithRedirect(auth, provider);
+  };
+
   logoutBtn.onclick = () => signOut(auth);
+
+  getRedirectResult(auth).catch(error => {
+    statusText.innerText = "Auth Error: " + error.message;
+  });
 
   onAuthStateChanged(auth, user => {
     currentUser = user;
@@ -87,6 +109,7 @@
       document.getElementById('authSection').classList.add('hidden');
       document.getElementById('appSection').classList.remove('hidden');
       document.getElementById('userEmail').innerText = user.email;
+      statusText.innerText = "Signed in successfully. Ready.";
     } else {
       document.getElementById('authSection').classList.remove('hidden');
       document.getElementById('appSection').classList.add('hidden');
@@ -97,100 +120,104 @@
   startCamBtn.onclick = async () => {
     startCamBtn.disabled = true;
     startViewerBtn.disabled = true;
-    statusText.innerText = "Initializing camera...";
+    statusText.innerText = "Requesting camera permissions...";
 
-    peerConnection = new RTCPeerConnection(rtcConfig);
-    const userDocRef = doc(db, 'streams', currentUser.uid);
-    const offerCandidates = collection(userDocRef, 'offerCandidates');
-    const answerCandidates = collection(userDocRef, 'answerCandidates');
+    try {
+      peerConnection = new RTCPeerConnection(rtcConfig);
+      const userDocRef = doc(db, 'streams', currentUser.uid);
+      const offerCandidates = collection(userDocRef, 'offerCandidates');
+      const answerCandidates = collection(userDocRef, 'answerCandidates');
 
-    // Acquire rear camera when possible
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
-      audio: true
-    });
-    
-    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-    videoPlayer.srcObject = localStream;
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
+        audio: true
+      });
+      
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+      videoPlayer.srcObject = localStream;
 
-    // Send ICE candidates to Firestore
-    peerConnection.onicecandidate = event => {
-      if (event.candidate) {
-        addDoc(offerCandidates, event.candidate.toJSON());
-      }
-    };
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          addDoc(offerCandidates, event.candidate.toJSON());
+        }
+      };
 
-    // Create & post offer SDP
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    await setDoc(userDocRef, { offer: { type: offer.type, sdp: offer.sdp } });
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      await setDoc(userDocRef, { offer: { type: offer.type, sdp: offer.sdp } });
 
-    statusText.innerText = "Camera live. Waiting for viewer to connect...";
+      statusText.innerText = "Camera live. Waiting for viewer to connect...";
 
-    // Listen for Answer SDP from Viewer
-    onSnapshot(userDocRef, async snapshot => {
-      const data = snapshot.data();
-      if (data?.answer && !peerConnection.currentRemoteDescription) {
-        const answer = new RTCSessionDescription(data.answer);
-        await peerConnection.setRemoteDescription(answer);
-        statusText.innerText = "Connected: Streaming to Viewer.";
-      }
-    });
-
-    // Listen for ICE candidates from Viewer
-    onSnapshot(answerCandidates, snapshot => {
-      snapshot.docChanges().forEach(change => {
-        if (change.type === 'added') {
-          peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      onSnapshot(userDocRef, async snapshot => {
+        const data = snapshot.data();
+        if (data?.answer && !peerConnection.currentRemoteDescription) {
+          const answer = new RTCSessionDescription(data.answer);
+          await peerConnection.setRemoteDescription(answer);
+          statusText.innerText = "Connected: Streaming to Viewer.";
         }
       });
-    });
+
+      onSnapshot(answerCandidates, snapshot => {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+          }
+        });
+      });
+    } catch (err) {
+      statusText.innerText = "Camera Error: " + err.message;
+      startCamBtn.disabled = false;
+      startViewerBtn.disabled = false;
+    }
   };
 
   // --- VIEWER MODE (RECEIVER) ---
   startViewerBtn.onclick = async () => {
     startCamBtn.disabled = true;
     startViewerBtn.disabled = true;
-    videoPlayer.muted = false; // Enable audio playback for viewer
+    videoPlayer.muted = false;
     statusText.innerText = "Connecting to camera stream...";
 
-    peerConnection = new RTCPeerConnection(rtcConfig);
-    const userDocRef = doc(db, 'streams', currentUser.uid);
-    const offerCandidates = collection(userDocRef, 'offerCandidates');
-    const answerCandidates = collection(userDocRef, 'answerCandidates');
+    try {
+      peerConnection = new RTCPeerConnection(rtcConfig);
+      const userDocRef = doc(db, 'streams', currentUser.uid);
+      const offerCandidates = collection(userDocRef, 'offerCandidates');
+      const answerCandidates = collection(userDocRef, 'answerCandidates');
 
-    // Attach inbound stream
-    peerConnection.ontrack = event => {
-      videoPlayer.srcObject = event.streams[0];
-      statusText.innerText = "Connected to remote camera.";
-    };
+      peerConnection.ontrack = event => {
+        videoPlayer.srcObject = event.streams[0];
+        statusText.innerText = "Connected to remote camera.";
+      };
 
-    peerConnection.onicecandidate = event => {
-      if (event.candidate) {
-        addDoc(answerCandidates, event.candidate.toJSON());
-      }
-    };
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          addDoc(answerCandidates, event.candidate.toJSON());
+        }
+      };
 
-    // Pull camera's offer SDP
-    onSnapshot(userDocRef, async snapshot => {
-      const data = snapshot.data();
-      if (data?.offer && !peerConnection.currentRemoteDescription) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-        
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        await setDoc(userDocRef, { answer: { type: answer.type, sdp: answer.sdp } }, { merge: true });
-      }
-    });
-
-    // Collect ICE candidates from Camera
-    onSnapshot(offerCandidates, snapshot => {
-      snapshot.docChanges().forEach(change => {
-        if (change.type === 'added') {
-          peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      onSnapshot(userDocRef, async snapshot => {
+        const data = snapshot.data();
+        if (data?.offer && !peerConnection.currentRemoteDescription) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+          
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          await setDoc(userDocRef, { answer: { type: answer.type, sdp: answer.sdp } }, { merge: true });
         }
       });
-    });
+
+      onSnapshot(offerCandidates, snapshot => {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'added') {
+            peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+          }
+        });
+      });
+    } catch (err) {
+      statusText.innerText = "Viewer Error: " + err.message;
+      startCamBtn.disabled = false;
+      startViewerBtn.disabled = false;
+    }
   };
 </script>
 </body>
